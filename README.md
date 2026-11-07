@@ -4,6 +4,15 @@ An end-to-end computer vision and intelligent transportation system (ITS) for tr
 
 ---
 
+## 🔗 Project Resources & Links
+
+| Resource | Link | Description |
+| :--- | :--- | :--- |
+| 🚀 **Production Web App** | [https://traffic-sign-detection-ai.vercel.app/](https://traffic-sign-detection-ai.vercel.app/) | Live single-page application hosted on **Vercel** with full client-side routing, YOLO AI detection, Google Maps live locations & photos, and user auth. |
+| 📁 **GitHub Source Code** | [https://github.com/abhiAbc123/Traffic-Sign-Detection-AI](https://github.com/abhiAbc123/Traffic-Sign-Detection-AI) | Public open-source repository containing frontend client, YOLOv8 computer vision engine, and SQLite database models. |
+
+---
+
 ## 🌟 Key Features
 
 ### 1. Computer Vision & Detection Engine
