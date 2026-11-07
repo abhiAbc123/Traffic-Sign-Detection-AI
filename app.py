@@ -46,8 +46,11 @@ except Exception:
 # Active In-Memory Sessions
 ACTIVE_SESSIONS = {}
 
-# Initialize Real SQLite Database
-database.init_db()
+# Initialize Real SQLite Database safely
+try:
+    database.init_db()
+except Exception as e:
+    print(f"[Traffic-AI] Database init notice: {e}")
 
 # Load Model safely (Local YOLO, auto-download, or Cloud Serverless fallback)
 model = None
@@ -165,14 +168,18 @@ def cloud_fallback_detect(image, label=""):
             "color": f"rgb({r},{g},{b})"
         })
 
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (b, g, r), 3)
-        lbl = f"{cls_name} {conf:.2f}"
-        font_scale = max(0.5, min(1.0, w_img / 1500.0))
-        thickness = max(1, int(font_scale * 2))
-        (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-        box_top = max(y1 - th - 10, 0)
-        cv2.rectangle(annotated, (x1, box_top), (x1 + tw + 10, box_top + th + 10), (b, g, r), -1)
-        cv2.putText(annotated, lbl, (x1 + 5, box_top + th + 3), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        if cv2 is not None and hasattr(annotated, 'shape'):
+            try:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (b, g, r), 3)
+                lbl = f"{cls_name} {conf:.2f}"
+                font_scale = max(0.5, min(1.0, w_img / 1500.0))
+                thickness = max(1, int(font_scale * 2))
+                (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                box_top = max(y1 - th - 10, 0)
+                cv2.rectangle(annotated, (x1, box_top), (x1 + tw + 10, box_top + th + 10), (b, g, r), -1)
+                cv2.putText(annotated, lbl, (x1 + 5, box_top + th + 3), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            except Exception:
+                pass
 
     return annotated, detections
 

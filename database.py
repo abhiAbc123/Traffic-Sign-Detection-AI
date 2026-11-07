@@ -8,143 +8,161 @@ from urllib.parse import quote
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# On Vercel / serverless runtimes, only /tmp is writable
-if os.environ.get('VERCEL'):
-    TMP_DB = '/tmp/traffic_data.db'
-    if not os.path.exists(TMP_DB):
+def _resolve_db_path():
+    # Detect Vercel, AWS Lambda, or any environment where BASE_DIR is read-only
+    is_serverless = (
+        bool(os.environ.get('VERCEL')) or
+        bool(os.environ.get('VERCEL_ENV')) or
+        bool(os.environ.get('VERCEL_URL')) or
+        bool(os.environ.get('AWS_LAMBDA_FUNCTION_NAME')) or
+        bool(os.environ.get('LAMBDA_TASK_ROOT')) or
+        not os.access(BASE_DIR, os.W_OK)
+    )
+    if is_serverless:
+        tmp_db = '/tmp/traffic_data.db'
         orig_db = os.path.join(BASE_DIR, 'traffic_data.db')
-        if os.path.exists(orig_db):
+        if not os.path.exists(tmp_db) and os.path.exists(orig_db):
             try:
                 import shutil
-                shutil.copyfile(orig_db, TMP_DB)
+                shutil.copyfile(orig_db, tmp_db)
             except Exception:
                 pass
-    DB_PATH = TMP_DB
-else:
-    DB_PATH = os.path.join(BASE_DIR, 'traffic_data.db')
+        return tmp_db
+    return os.path.join(BASE_DIR, 'traffic_data.db')
+
+DB_PATH = _resolve_db_path()
 
 INPUT_DIR = os.path.join(BASE_DIR, 'imageRecognition', 'input_images')
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception:
+        # Fallback to in-memory SQLite if /tmp or file permissions fail
+        conn = sqlite3.connect(':memory:', timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # Table 1: Junctions / Camera Locations
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS junctions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            location TEXT NOT NULL,
-            total_lanes INTEGER DEFAULT 4,
-            speed_limit INTEGER DEFAULT 50,
-            latitude REAL DEFAULT 37.7749,
-            longitude REAL DEFAULT -122.4194,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Migration for latitude & longitude columns
-    cursor.execute("PRAGMA table_info(junctions)")
-    existing_cols = [row[1] for row in cursor.fetchall()]
-    if 'latitude' not in existing_cols:
-        cursor.execute("ALTER TABLE junctions ADD COLUMN latitude REAL DEFAULT 37.7749")
-    if 'longitude' not in existing_cols:
-        cursor.execute("ALTER TABLE junctions ADD COLUMN longitude REAL DEFAULT -122.4194")
-
-    # Table 2: Detection Events
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS detection_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            junction_id INTEGER NOT NULL,
-            image_name TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            total_vehicles INTEGER DEFAULT 0,
-            cars_count INTEGER DEFAULT 0,
-            buses_count INTEGER DEFAULT 0,
-            trucks_count INTEGER DEFAULT 0,
-            motorcycles_count INTEGER DEFAULT 0,
-            pedestrians_count INTEGER DEFAULT 0,
-            signs_count INTEGER DEFAULT 0,
-            signs_list TEXT,
-            inference_ms REAL,
-            FOREIGN KEY (junction_id) REFERENCES junctions (id)
-        )
-    ''')
-
-    # Table 3: Traffic Timings (Calculated Smart Signal Timings)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS traffic_timings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            junction_id INTEGER NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            congestion_level TEXT NOT NULL,
-            density_score REAL NOT NULL,
-            green_duration_sec INTEGER NOT NULL,
-            yellow_duration_sec INTEGER DEFAULT 4,
-            red_duration_sec INTEGER NOT NULL,
-            cycle_time_sec INTEGER NOT NULL,
-            estimated_clearance_sec REAL NOT NULL,
-            recommended_speed_kmh INTEGER,
-            signal_state TEXT DEFAULT 'GREEN',
-            FOREIGN KEY (event_id) REFERENCES detection_events (id),
-            FOREIGN KEY (junction_id) REFERENCES junctions (id)
-        )
-    ''')
-
-    # Table 4: Users (Authentication & Roles)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            role TEXT DEFAULT 'operator',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Insert default junctions if empty
-    cursor.execute('SELECT COUNT(*) FROM junctions')
-    if cursor.fetchone()[0] == 0:
-        default_junctions = [
-            ("Junction A - Central Boulevard", "Downtown Core (North-South)", 4, 50, 37.7749, -122.4194),
-            ("Junction B - Highway 101 Interchange", "Expressway Corridor (East-West)", 6, 80, 37.6879, -122.4702),
-            ("Junction C - Metro Station Crossing", "Transit Hub & Pedestrian Zone", 3, 40, 37.7879, -122.4075),
-            ("Junction D - Tech Park Avenue", "Suburban Business District", 4, 60, 37.3861, -122.0839),
-        ]
-        cursor.executemany(
-            'INSERT INTO junctions (name, location, total_lanes, speed_limit, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)',
-            default_junctions
-        )
-    else:
-        # Update existing default records with specific coordinates
-        cursor.execute("UPDATE junctions SET latitude = 37.7749, longitude = -122.4194 WHERE name LIKE '%Central%'")
-        cursor.execute("UPDATE junctions SET latitude = 37.6879, longitude = -122.4702 WHERE name LIKE '%Highway 101%'")
-        cursor.execute("UPDATE junctions SET latitude = 37.7879, longitude = -122.4075 WHERE name LIKE '%Metro%'")
-        cursor.execute("UPDATE junctions SET latitude = 37.3861, longitude = -122.0839 WHERE name LIKE '%Tech Park%'")
-
-    # Insert default demo user if empty
-    cursor.execute('SELECT COUNT(*) FROM users')
-    if cursor.fetchone()[0] == 0:
-        demo_salt = secrets.token_hex(16)
-        demo_hash = hashlib.sha256((demo_salt + "traffic2026").encode('utf-8')).hexdigest()
+        # Table 1: Junctions / Camera Locations
         cursor.execute('''
-            INSERT INTO users (username, email, password_hash, salt, role)
-            VALUES (?, ?, ?, ?, ?)
-        ''', ("demo_operator", "operator@trafficsign.ai", demo_hash, demo_salt, "operator"))
+            CREATE TABLE IF NOT EXISTS junctions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                location TEXT NOT NULL,
+                total_lanes INTEGER DEFAULT 4,
+                speed_limit INTEGER DEFAULT 50,
+                latitude REAL DEFAULT 37.7749,
+                longitude REAL DEFAULT -122.4194,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
-    conn.commit()
-    conn.close()
-    print(f"[DB] Initialized database at {DB_PATH}")
+        # Migration for latitude & longitude columns
+        cursor.execute("PRAGMA table_info(junctions)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if 'latitude' not in existing_cols:
+            cursor.execute("ALTER TABLE junctions ADD COLUMN latitude REAL DEFAULT 37.7749")
+        if 'longitude' not in existing_cols:
+            cursor.execute("ALTER TABLE junctions ADD COLUMN longitude REAL DEFAULT -122.4194")
+
+        # Table 2: Detection Events
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS detection_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                junction_id INTEGER NOT NULL,
+                image_name TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                total_vehicles INTEGER DEFAULT 0,
+                cars_count INTEGER DEFAULT 0,
+                buses_count INTEGER DEFAULT 0,
+                trucks_count INTEGER DEFAULT 0,
+                motorcycles_count INTEGER DEFAULT 0,
+                pedestrians_count INTEGER DEFAULT 0,
+                signs_count INTEGER DEFAULT 0,
+                signs_list TEXT,
+                inference_ms REAL,
+                FOREIGN KEY (junction_id) REFERENCES junctions (id)
+            )
+        ''')
+
+        # Table 3: Traffic Timings (Calculated Smart Signal Timings)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS traffic_timings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER NOT NULL,
+                junction_id INTEGER NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                congestion_level TEXT NOT NULL,
+                density_score REAL NOT NULL,
+                green_duration_sec INTEGER NOT NULL,
+                yellow_duration_sec INTEGER DEFAULT 4,
+                red_duration_sec INTEGER NOT NULL,
+                cycle_time_sec INTEGER NOT NULL,
+                estimated_clearance_sec REAL NOT NULL,
+                recommended_speed_kmh INTEGER,
+                signal_state TEXT DEFAULT 'GREEN',
+                FOREIGN KEY (event_id) REFERENCES detection_events (id),
+                FOREIGN KEY (junction_id) REFERENCES junctions (id)
+            )
+        ''')
+
+        # Table 4: Users (Authentication & Roles)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                role TEXT DEFAULT 'operator',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Insert default junctions if empty
+        cursor.execute('SELECT COUNT(*) FROM junctions')
+        if cursor.fetchone()[0] == 0:
+            default_junctions = [
+                ("Junction A - Central Boulevard", "Downtown Core (North-South)", 4, 50, 37.7749, -122.4194),
+                ("Junction B - Highway 101 Interchange", "Expressway Corridor (East-West)", 6, 80, 37.6879, -122.4702),
+                ("Junction C - Metro Station Crossing", "Transit Hub & Pedestrian Zone", 3, 40, 37.7879, -122.4075),
+                ("Junction D - Tech Park Avenue", "Suburban Business District", 4, 60, 37.3861, -122.0839),
+            ]
+            cursor.executemany(
+                'INSERT INTO junctions (name, location, total_lanes, speed_limit, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)',
+                default_junctions
+            )
+        else:
+            # Update existing default records with specific coordinates
+            cursor.execute("UPDATE junctions SET latitude = 37.7749, longitude = -122.4194 WHERE name LIKE '%Central%'")
+            cursor.execute("UPDATE junctions SET latitude = 37.6879, longitude = -122.4702 WHERE name LIKE '%Highway 101%'")
+            cursor.execute("UPDATE junctions SET latitude = 37.7879, longitude = -122.4075 WHERE name LIKE '%Metro%'")
+            cursor.execute("UPDATE junctions SET latitude = 37.3861, longitude = -122.0839 WHERE name LIKE '%Tech Park%'")
+
+        # Insert default demo user if empty
+        cursor.execute('SELECT COUNT(*) FROM users')
+        if cursor.fetchone()[0] == 0:
+            demo_salt = secrets.token_hex(16)
+            demo_hash = hashlib.sha256((demo_salt + "traffic2026").encode('utf-8')).hexdigest()
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, salt, role)
+                VALUES (?, ?, ?, ?, ?)
+            ''', ("demo_operator", "operator@trafficsign.ai", demo_hash, demo_salt, "operator"))
+
+        conn.commit()
+        conn.close()
+        print(f"[DB] Initialized database at {DB_PATH}")
+    except Exception as e:
+        print(f"[DB Warning] init_db failed: {e}")
 
 
 def calculate_traffic_timing(counts):
