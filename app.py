@@ -1991,10 +1991,27 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress verbose standard HTTP request logging
 
+    def get_actual_path(self):
+        for hdr in ['x-matched-path', 'x-forwarded-uri', 'x-original-uri', 'x-now-route-matches']:
+            val = self.headers.get(hdr)
+            if val and val not in ['/api/index', '/api/index.py']:
+                return val
+
+        raw = self.path or '/'
+        if raw.startswith('/api/index'):
+            rest = raw[len('/api/index'):]
+            if rest.startswith('.py'):
+                rest = rest[3:]
+            return rest if rest else '/'
+        return raw
+
     def do_GET(self):
-        parsed = urlparse(self.path)
+        actual = self.get_actual_path()
+        parsed = urlparse(actual)
         path = parsed.path
         query = parse_qs(parsed.query)
+        if not query:
+            query = parse_qs(urlparse(self.path).query)
 
         if path in ['/', '/index.html']:
             self.send_response(200)
@@ -2150,9 +2167,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
-        parsed = urlparse(self.path)
+        actual = self.get_actual_path()
+        parsed = urlparse(actual)
+        path = parsed.path
 
-        if parsed.path == '/api/junctions':
+        if path == '/api/junctions':
             length = int(self.headers.get('Content-Length', 0))
             raw_body = self.rfile.read(length)
             try:
@@ -2175,7 +2194,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
-        elif parsed.path == '/api/detect':
+        elif path == '/api/detect':
             length = int(self.headers.get('Content-Length', 0))
             raw_body = self.rfile.read(length)
             try:
@@ -2256,7 +2275,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
-        elif parsed.path == '/api/auth/signup':
+        elif path == '/api/auth/signup':
             length = int(self.headers.get('Content-Length', 0))
             raw_body = self.rfile.read(length)
             try:
@@ -2283,7 +2302,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
-        elif parsed.path == '/api/auth/login':
+        elif path == '/api/auth/login':
             length = int(self.headers.get('Content-Length', 0))
             raw_body = self.rfile.read(length)
             try:
@@ -2315,7 +2334,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
-        elif parsed.path == '/api/auth/logout':
+        elif path == '/api/auth/logout':
             auth_hdr = self.headers.get('Authorization', '')
             token = auth_hdr.replace('Bearer ', '').strip() if 'Bearer ' in auth_hdr else ''
             if token in ACTIVE_SESSIONS:

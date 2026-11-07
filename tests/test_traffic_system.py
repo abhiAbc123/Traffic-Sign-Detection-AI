@@ -1,8 +1,93 @@
 import os
 import unittest
 import urllib.request
+import urllib.parse
 import json
+import io
 import database
+import api.index
+
+
+class MockHeaders:
+    def __init__(self, headers):
+        self._headers = headers
+
+    def get_all(self, name, failobj=None):
+        name_lower = name.lower()
+        res = [v for k, v in self._headers if k.lower() == name_lower]
+        return res if res else (failobj or [])
+
+    def get(self, name, default=None):
+        name_lower = name.lower()
+        for k, v in self._headers:
+            if k.lower() == name_lower:
+                return v
+        return default
+
+
+class MockResponse:
+    def __init__(self, status, headers, body):
+        self.status = status
+        self.headers = MockHeaders(headers)
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+def wsgi_urlopen(req, timeout=5):
+    """
+    Direct in-memory WSGI caller mimicking urllib.request.urlopen.
+    Tests the exact Vercel serverless WSGI application reliably without network sockets.
+    """
+    if isinstance(req, str):
+        url = req
+        data = b''
+        method = 'GET'
+        headers = {}
+    else:
+        url = req.full_url
+        data = req.data if req.data else b''
+        method = req.get_method()
+        headers = req.headers
+
+    parsed = urllib.parse.urlparse(url)
+    env = {
+        'REQUEST_METHOD': method,
+        'PATH_INFO': parsed.path,
+        'QUERY_STRING': parsed.query,
+        'CONTENT_LENGTH': str(len(data)),
+        'wsgi.input': io.BytesIO(data),
+        'wsgi.errors': io.StringIO(),
+        'wsgi.version': (1, 0),
+        'wsgi.multithread': False,
+        'wsgi.multiprocess': False,
+        'wsgi.run_once': False,
+    }
+    for k, v in headers.items():
+        env['HTTP_' + k.upper().replace('-', '_')] = str(v)
+    if 'Content-type' in headers or 'Content-Type' in headers:
+        env['CONTENT_TYPE'] = str(headers.get('Content-Type') or headers.get('Content-type'))
+
+    status_holder = {}
+    def start_response(status, resp_headers):
+        status_holder['code'] = int(status.split()[0])
+        status_holder['headers'] = resp_headers
+
+    body_chunks = api.index.application(env, start_response)
+    body = b''.join(body_chunks)
+    return MockResponse(status_holder.get('code', 200), status_holder.get('headers', []), body)
+
+
+# Monkey-patch urllib.request.urlopen to use wsgi_urlopen for hermetic in-process testing
+urllib.request.urlopen = wsgi_urlopen
+
 
 
 class TestTrafficTimingDatabase(unittest.TestCase):
