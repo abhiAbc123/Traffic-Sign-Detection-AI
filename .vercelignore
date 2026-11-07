@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+imageRecognition/yolov8m.pt
+tests/
+scratch/
+.pytest_cache/
+
