@@ -8,21 +8,40 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-import cv2
-import numpy as np
-from ultralytics import YOLO
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
+
 import database
-import get_traffic_feed
 import auth_page
+
+try:
+    import get_traffic_feed
+except Exception:
+    get_traffic_feed = None
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, 'imageRecognition', 'yolov8m.pt')
 INPUT_DIR = os.path.join(BASE_DIR, 'imageRecognition', 'input_images')
-OUTPUT_DIR = os.path.join(BASE_DIR, 'imageRecognition', 'DetectionOutput')
+OUTPUT_DIR = os.path.join('/tmp', 'DetectionOutput') if os.environ.get('VERCEL') else os.path.join(BASE_DIR, 'imageRecognition', 'DetectionOutput')
 
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+try:
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+except Exception:
+    pass
 
 # Active In-Memory Sessions
 ACTIVE_SESSIONS = {}

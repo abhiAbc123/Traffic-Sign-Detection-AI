@@ -2,8 +2,15 @@ import argparse
 import json
 import os
 import sys
-import cv2
-from ultralytics import YOLO
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
 import database
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
